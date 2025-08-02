@@ -1,8 +1,14 @@
 use std::marker::PhantomData;
 
 use pulldown_cmark::{
-    CodeBlockKind, CowStr, Event as CmarkEvent, Options as CmarkOptions, Parser as CmarkParser,
+    CodeBlockKind,
+    CowStr,
+    Event as CmarkEvent,
+    Options as CmarkOptions,
+    Parser as CmarkParser,
     Tag as CmarkTag,
+    TagEnd,
+    HeadingLevel,
 };
 use teloxide::types::{MessageEntity, MessageEntityKind};
 
@@ -43,44 +49,65 @@ enum Tag<'a> {
     Image(CowStr<'a>),
 }
 
+use std::convert::Infallible;
+
 impl<'a> TryFrom<CmarkTag<'a>> for Tag<'a> {
     type Error = ParserError<'a>;
 
     fn try_from(value: CmarkTag<'a>) -> Result<Self, Self::Error> {
         let mapped = match value {
-            CmarkTag::Paragraph | CmarkTag::BlockQuote => Tag::Paragraph,
-            CmarkTag::Heading(level, _, _) => Tag::Heading(level as _),
-            CmarkTag::CodeBlock(code_block_kind) => match code_block_kind {
-                CodeBlockKind::Indented => Tag::CodeBlock(None),
-                CodeBlockKind::Fenced(lang) => Tag::CodeBlock(Some(lang)),
-            },
-            CmarkTag::List(first) => Tag::List(first),
+            CmarkTag::Paragraph => Tag::Paragraph,
+            CmarkTag::BlockQuote(_) => Tag::Paragraph,
+            CmarkTag::Heading { level, .. } => Tag::Heading(level as u32),
+            CmarkTag::CodeBlock(CodeBlockKind::Indented) => Tag::CodeBlock(None),
+            CmarkTag::CodeBlock(CodeBlockKind::Fenced(lang)) => Tag::CodeBlock(Some(lang)),
+            CmarkTag::List(Some(first)) => Tag::List(Some(first)),
+            CmarkTag::List(None) => Tag::List(None),
             CmarkTag::Item => Tag::Item,
             CmarkTag::Emphasis => Tag::Italic,
             CmarkTag::Strong => Tag::Bold,
             CmarkTag::Strikethrough => Tag::Strikethrough,
-            CmarkTag::Link(_, url, _) => Tag::Link(url),
-            CmarkTag::Image(_, url, _) => Tag::Image(url),
+            CmarkTag::Link { dest_url, .. } => Tag::Link(dest_url),
+            CmarkTag::Image { dest_url, .. } => Tag::Image(dest_url),
             _ => return Err(ParserError::UnexpectedCmarkTag(value)),
         };
         Ok(mapped)
     }
 }
 
+impl<'a> TryFrom<TagEnd> for Tag<'a> {
+    type Error = Infallible;
+
+    fn try_from(tag_end: TagEnd) -> Result<Self, Self::Error> {
+        let tag = match tag_end {
+            TagEnd::Paragraph => Tag::Paragraph,
+            TagEnd::Heading(level) => Tag::Heading(level as u32),
+            TagEnd::BlockQuote(_) => Tag::Paragraph,
+            TagEnd::CodeBlock => Tag::CodeBlock(None),
+            TagEnd::List(_) => Tag::List(None),
+            TagEnd::Item => Tag::Item,
+            TagEnd::Emphasis => Tag::Italic,
+            TagEnd::Strong => Tag::Bold,
+            TagEnd::Strikethrough => Tag::Strikethrough,
+            TagEnd::Link => Tag::Link(CowStr::Borrowed("")),
+            TagEnd::Image => Tag::Image(CowStr::Borrowed("")),
+            _ => unreachable!(),
+        };
+        Ok(tag)
+    }
+}
 impl<'a> TryFrom<CmarkEvent<'a>> for Event<'a> {
     type Error = ParserError<'a>;
 
     fn try_from(value: CmarkEvent<'a>) -> Result<Self, Self::Error> {
         let mapped = match value {
             CmarkEvent::Start(tag) => Event::Start(tag.try_into()?),
-            CmarkEvent::End(tag) => Event::End(tag.try_into()?),
+            CmarkEvent::End(tag_end) => Event::End(tag_end.try_into().unwrap()),
             CmarkEvent::Text(text) => Event::Text(text),
             CmarkEvent::Html(text) | CmarkEvent::Code(text) => Event::Code(text),
             CmarkEvent::SoftBreak | CmarkEvent::HardBreak => Event::Break,
             CmarkEvent::Rule => Event::Text(CowStr::Borrowed("---")),
-            _ => {
-                return Err(ParserError::UnexpectedCmarkEvent(value));
-            }
+            _ => return Err(ParserError::UnexpectedCmarkEvent(value)),
         };
         Ok(mapped)
     }
@@ -106,18 +133,15 @@ impl<'a> TryFrom<&Tag<'a>> for EntityKind {
             Tag::Strikethrough => EntityKind::TelegramEntityKind(MessageEntityKind::Strikethrough),
             Tag::Link(url) | Tag::Image(url) => {
                 EntityKind::TelegramEntityKind(MessageEntityKind::TextLink {
-                    url: url
-                        .parse()
-                        .map_err(|_| ParserError::InvalidURL(url.clone()))?,
+                    url: url.parse().map_err(|_| ParserError::InvalidURL(url.clone()))?,
                 })
             }
-            _ => {
-                return Err(ParserError::UnexpectedTag(value.clone()));
-            }
+            _ => return Err(ParserError::UnexpectedTag(value.clone())),
         };
         Ok(mapped)
     }
 }
+
 
 #[derive(Clone, Debug)]
 struct Entity {
