@@ -9,5 +9,17 @@
     ],
     "i18n": {
         "resetPrompt": "Your conversation has been reset."
+    },
+    "mcpServers": {
+        "searxngmcp": {
+            "command": "searxngmcp",
+            "args": [],
+            "env": {
+                "SEARXNG_URL": "https://searx.example.com",
+                "SEARXNG_USERNAME": "your_username",
+                "SEARXNG_PASSWORD": "your_password"
+            },
+            "disabled": false
+        }
     }
 }
